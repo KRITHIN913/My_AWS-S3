@@ -1,0 +1,134 @@
+version: '3.9'
+
+# ============================================================
+# Project 5 — Multi-Tenant Usage Metering & Billing Engine
+# ============================================================
+# Philosophy: Each service owns a named volume, exposes only
+# what is necessary, and is health-checked before dependents
+# are allowed to start. No race conditions at boot.
+# ============================================================
+
+networks:
+  p5_net:
+    driver: bridge
+
+volumes:
+  pg_data:
+  redis_data:
+  minio_data:
+
+services:
+
+  # ----------------------------------------------------------
+  # PostgreSQL — control plane (tenants, buckets, billing)
+  # ----------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: p5_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-p5_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-p5_secret}
+      POSTGRES_DB:       ${POSTGRES_DB:-p5_billing}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - p5_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-p5_admin} -d ${POSTGRES_DB:-p5_billing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ----------------------------------------------------------
+  # Redis — real-time quota counters and usage cache
+  # ----------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: p5_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - p5_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ----------------------------------------------------------
+  # MinIO — S3-compatible data plane (self-hosted)
+  # Single-node mode for development; swap to distributed
+  # mode for production by changing the startup command.
+  # ----------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: p5_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:-p5_minio_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-p5_minio_secret}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO web console
+    networks:
+      - p5_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ----------------------------------------------------------
+  # API — Fastify metering & billing engine
+  # Started only after all backing services are healthy.
+  # ----------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: p5_api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+
+      # PostgreSQL
+      DATABASE_URL: postgres://${POSTGRES_USER:-p5_admin}:${POSTGRES_PASSWORD:-p5_secret}@postgres:5432/${POSTGRES_DB:-p5_billing}
+
+      # Redis
+      REDIS_URL: redis://redis:6379
+
+      # MinIO — internal network address (not the host-exposed port)
+      MINIO_ENDPOINT:   minio
+      MINIO_PORT:       9000
+      MINIO_USE_SSL:    "false"
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-p5_minio_admin}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-p5_minio_secret}
+
+    ports:
+      - "3000:3000"
+    networks:
+      - p5_net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    # Mount source for hot-reload in dev; remove in production image
+    volumes:
+      - ./src:/app/src:ro

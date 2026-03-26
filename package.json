@@ -1,0 +1,32 @@
+{
+  "name": "multi-tenant-s3-billing-engine",
+  "version": "1.0.0",
+  "description": "Multi-Tenant S3 Billing & Metering Engine",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.0.0",
+    "dotenv": "^16.0.0",
+    "drizzle-orm": "^0.45.1",
+    "fastify": "^4.0.0",
+    "ioredis": "^5.0.0",
+    "minio": "^8.0.7",
+    "pg": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.0.0",
+    "drizzle-kit": "^0.31.10",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.0"
+  }
+}
