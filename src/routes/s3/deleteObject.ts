@@ -23,16 +23,14 @@ import { buckets } from '../../drizzle/schema.js';
 import type { DrizzleDb } from '../../db/index.js';
 import type { Redis } from 'ioredis';
 import type { Client as MinioClientType } from 'minio';
-import { authenticate } from '../../plugins/authenticate.js';
+import { createAuthenticateHandler } from '../../plugins/authenticate.js';
 import { recordDeletion } from '../../lib/meteringService.js';
 
 // ─────────────────────────────────────────────────────────────
 // S3 XML error helper
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Builds an S3-compatible XML error response body.
- */
+
 function buildS3Error(
   code: string,
   message: string,
@@ -54,10 +52,7 @@ function buildS3Error(
 // Validation helpers
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Validates an S3 object key.
- * @returns null if valid, or a validation error string.
- */
+
 function validateObjectKey(key: string): string | null {
   if (key.length < 1) return 'Object key must be at least 1 character';
   if (key.length > 1024) return 'Object key must not exceed 1024 characters';
@@ -66,10 +61,7 @@ function validateObjectKey(key: string): string | null {
   return null;
 }
 
-/**
- * Validates a bucket name using S3 naming rules.
- * @returns null if valid, or a validation error string.
- */
+
 function validateBucketName(name: string): string | null {
   if (name.length < 3) return 'Bucket name must be at least 3 characters long';
   if (name.length > 63) return 'Bucket name must not exceed 63 characters';
@@ -79,9 +71,7 @@ function validateBucketName(name: string): string | null {
   return null;
 }
 
-/**
- * Determines if a MinIO error is a NotFound-class error.
- */
+
 function isNotFoundError(err: unknown): boolean {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = (err as { code: string }).code;
@@ -94,20 +84,19 @@ function isNotFoundError(err: unknown): boolean {
 // Route plugin
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Fastify plugin that registers `DELETE /:bucketName/*` for DeleteObject.
- *
- * Policy decision: suspended buckets ALLOW deletes so tenants can free
- * quota to get back under their limit.
- *
- * @param fastify - Fastify instance.
- * @param opts    - Injected dependencies.
- */
+export interface DeleteObjectPluginOptions {
+  db: DrizzleDb;
+  redis: Redis;
+  minioClient: MinioClientType;
+}
+
+
 export default async function deleteObjectRoute(
   fastify: FastifyInstance,
-  opts: { db: DrizzleDb; redis: Redis; minioClient: MinioClientType },
+  opts: DeleteObjectPluginOptions,
 ): Promise<void> {
   const { db, redis, minioClient } = opts;
+  const authenticate = createAuthenticateHandler(db);
 
   fastify.route({
     method: 'DELETE',
@@ -124,7 +113,10 @@ export default async function deleteObjectRoute(
       },
     },
 
-    handler: async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+    handler: async (
+      request: FastifyRequest, 
+      reply: FastifyReply
+    ): Promise<void> => {
       const requestId = randomUUID();
       const params = request.params as { bucketName: string; '*': string };
       const bucketName = params.bucketName;

@@ -1,23 +1,24 @@
 // src/routes/billing/invoices.ts
-/**
- * Billing API Routes
- * 
- * Provides read-only access for tenants to query their billing history and invoices.
- */
+
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import type { DrizzleDb } from '../../db/index.js';
 import { invoices, usageMetrics } from '../../drizzle/schema.js';
-import { authenticate } from '../../plugins/authenticate.js';
+import { createAuthenticateHandler } from '../../plugins/authenticate.js';
+
 
 export default async function billingRoutesPlugin(
   fastify: FastifyInstance,
   opts: { db: DrizzleDb },
 ): Promise<void> {
   const db = opts.db;
+  const authenticate = createAuthenticateHandler(db);
 
+  // ─────────────────────────────────────────────────────────
   // GET /billing/invoices
-  // Query params: period? (YYYY-MM), status? (draft|finalised|void), limit? (1-100, default 12)
+  // Query params: period?, status?, limit? (1-100, default 12)
+  // ─────────────────────────────────────────────────────────
+
   fastify.get<{
     Querystring: {
       period?: string;
@@ -27,57 +28,71 @@ export default async function billingRoutesPlugin(
   }>('/invoices', { preHandler: [authenticate] }, async (request, reply) => {
     const tenantId = request.tenantId;
     const { period, status, limit } = request.query;
-    
-    const maxLimit = limit ? Math.max(1, Math.min(100, parseInt(limit, 10))) : 12;
+
+    const parsedLimit = limit
+      ? Math.max(1, Math.min(100, parseInt(limit, 10) || 12))
+      : 12;
 
     const conditions = [eq(invoices.tenantId, tenantId)];
     if (period) conditions.push(eq(invoices.billingPeriod, period));
-    if (status) conditions.push(eq(invoices.status, status as 'draft'|'finalised'|'void'));
+    if (status) conditions.push(eq(invoices.status, status));
 
     const results = await db
       .select()
       .from(invoices)
       .where(and(...conditions))
       .orderBy(desc(invoices.billingPeriod))
-      .limit(maxLimit);
+      .limit(parsedLimit);
+
+    // Get total count for the filter (without limit) for pagination metadata
+    const countResult = await db
+      .select({ count: sql<number>`COUNT(*)::integer` })
+      .from(invoices)
+      .where(and(...conditions));
 
     return reply.code(200).send({
       invoices: results,
-      total: results.length, // Simple total for this page
+      total: countResult[0]?.count ?? results.length,
     });
   });
 
+  // ─────────────────────────────────────────────────────────
   // GET /billing/invoices/:invoiceId
+  // ─────────────────────────────────────────────────────────
+
   fastify.get<{
-    Params: {
-      invoiceId: string;
-    };
-  }>('/invoices/:invoiceId', { preHandler: [authenticate] }, async (request, reply) => {
-    const tenantId = request.tenantId;
-    const { invoiceId } = request.params;
+    Params: { invoiceId: string };
+  }>(
+    '/invoices/:invoiceId',
+    { preHandler: [authenticate] },
+    async (request, reply) => {
+      const tenantId = request.tenantId;
+      const { invoiceId } = request.params;
 
-    const result = await db
-      .select()
-      .from(invoices)
-      .where(
-        and(
-          eq(invoices.id, invoiceId),
-          eq(invoices.tenantId, tenantId)
+      const result = await db
+        .select()
+        .from(invoices)
+        .where(
+          and(eq(invoices.id, invoiceId), eq(invoices.tenantId, tenantId)),
         )
-      )
-      .limit(1);
+        .limit(1);
 
-    if (result.length === 0) {
-      return reply.code(404).send({ error: 'InvoiceNotFound' });
-    }
+      if (result.length === 0) {
+        return reply.code(404).send({ error: 'InvoiceNotFound' });
+      }
 
-    return reply.code(200).send({ invoice: result[0] });
-  });
+      return reply.code(200).send({ invoice: result[0] });
+    },
+  );
 
+  // ─────────────────────────────────────────────────────────
   // GET /billing/usage
+  // Query params: period (required, YYYY-MM), granularity? ('daily'|'total')
+  // ─────────────────────────────────────────────────────────
+
   fastify.get<{
     Querystring: {
-      period: string; // Required
+      period: string;
       granularity?: 'daily' | 'total';
     };
   }>('/usage', { preHandler: [authenticate] }, async (request, reply) => {
@@ -85,19 +100,22 @@ export default async function billingRoutesPlugin(
     const { period, granularity = 'total' } = request.query;
 
     if (!period || !/^\d{4}-\d{2}$/.test(period)) {
-      return reply.code(400).send({ error: 'Invalid period format. Expected YYYY-MM.' });
+      return reply
+        .code(400)
+        .send({ error: 'Invalid period format. Expected YYYY-MM.' });
     }
 
     if (granularity === 'total') {
-      const results = await db.execute<{
+      // Aggregate usage_metrics for the period, return totals per eventType
+      const metricsResult = await db.execute<{
         event_type: string;
         total_bytes: string;
         total_requests: string;
       }>(sql`
         SELECT
           event_type,
-          SUM(bytes) AS total_bytes,
-          SUM(request_count) AS total_requests
+          COALESCE(SUM(bytes), 0)         AS total_bytes,
+          COALESCE(SUM(request_count), 0) AS total_requests
         FROM usage_metrics
         WHERE tenant_id = ${tenantId}
           AND billing_period = ${period}
@@ -105,7 +123,7 @@ export default async function billingRoutesPlugin(
       `);
 
       const usageTotals: Record<string, { bytes: string; requestCount: number }> = {};
-      for (const row of results) {
+      for (const row of metricsResult.rows) {
         usageTotals[row.event_type] = {
           bytes: row.total_bytes || '0',
           requestCount: parseInt(row.total_requests || '0', 10),
@@ -116,8 +134,11 @@ export default async function billingRoutesPlugin(
         period,
         usage: usageTotals,
       });
-    } else if (granularity === 'daily') {
-      const results = await db.execute<{
+    }
+
+    if (granularity === 'daily') {
+      // GROUP BY day + event_type, return array of daily breakdowns
+      const dailyResult = await db.execute<{
         date: string;
         event_type: string;
         bytes: string;
@@ -126,8 +147,8 @@ export default async function billingRoutesPlugin(
         SELECT
           TO_CHAR(DATE_TRUNC('day', occurred_at), 'YYYY-MM-DD') AS date,
           event_type,
-          SUM(bytes) AS bytes,
-          SUM(request_count) AS request_count
+          COALESCE(SUM(bytes), 0)         AS bytes,
+          COALESCE(SUM(request_count), 0) AS request_count
         FROM usage_metrics
         WHERE tenant_id = ${tenantId}
           AND billing_period = ${period}
@@ -135,7 +156,7 @@ export default async function billingRoutesPlugin(
         ORDER BY date ASC, event_type ASC
       `);
 
-      const dailyUsage = results.map(row => ({
+      const dailyUsage = dailyResult.rows.map((row) => ({
         date: row.date,
         eventType: row.event_type,
         bytes: row.bytes || '0',
@@ -146,8 +167,10 @@ export default async function billingRoutesPlugin(
         period,
         usage: dailyUsage,
       });
-    } else {
-      return reply.code(400).send({ error: 'Invalid granularity. Expected daily or total.' });
     }
+
+    return reply
+      .code(400)
+      .send({ error: 'Invalid granularity. Expected daily or total.' });
   });
 }

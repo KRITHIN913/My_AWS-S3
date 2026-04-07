@@ -26,7 +26,7 @@ import { buckets, usageMetrics } from '../../drizzle/schema.js';
 import type { DrizzleDb } from '../../db/index.js';
 import type { Redis } from 'ioredis';
 import type { Client as MinioClientType } from 'minio';
-import { authenticate } from '../../plugins/authenticate.js';
+import { createAuthenticateHandler } from '../../plugins/authenticate.js';
 import {
   getBucketCount,
   getTenantQuota,
@@ -37,15 +37,6 @@ import {
 // S3 XML error helper
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Builds an S3-compatible XML error response body.
- *
- * @param code       - The S3 error code (e.g. 'InvalidBucketName', 'QuotaExceeded').
- * @param message    - A human-readable error message.
- * @param bucketName - The bucket name that caused the error (may be empty string).
- * @param requestId  - The Fastify request ID for traceability.
- * @returns An XML string conforming to the S3 error response schema.
- */
 export function buildS3Error(
   code: string,
   message: string,
@@ -67,30 +58,13 @@ export function buildS3Error(
 // Bucket name validation
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Regular expression for valid S3 bucket name characters.
- * Allowed: lowercase letters, digits, hyphens.
- */
+
 const BUCKET_NAME_PATTERN = /^[a-z0-9-]+$/;
 
-/**
- * Regular expression that matches IPv4 addresses (e.g. '192.168.1.1').
- * Bucket names must not look like IP addresses.
- */
+
 const IP_ADDRESS_PATTERN = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
-/**
- * Validates a bucket name against S3 naming rules.
- *
- * Rules:
- *   - 3 to 63 characters long
- *   - Only lowercase letters, digits, and hyphens
- *   - Must not start or end with a hyphen
- *   - Must not be formatted as an IP address
- *
- * @param name - The candidate bucket name.
- * @returns `null` if valid, or a string describing the validation failure.
- */
+
 export function validateBucketName(name: string): string | null {
   if (name.length < 3) {
     return 'Bucket name must be at least 3 characters long';
@@ -114,15 +88,11 @@ export function validateBucketName(name: string): string | null {
 // Current billing period helper
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Returns the current billing period in 'YYYY-MM' format.
- * @returns A string like '2025-06'.
- */
 function currentBillingPeriod(): string {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = (now.getUTCMonth() + 1).toString().padStart(2, '0');
-  return `${year}-${month}`;
+  return `${year}-${month}`;    
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -136,20 +106,13 @@ export interface CreateBucketPluginOptions {
   minioClient: MinioClientType;
 }
 
-/**
- * Fastify plugin that registers the `PUT /:bucketName` route.
- *
- * This plugin must be registered after the `authenticatePlugin` so that
- * `request.tenantId` and `request.tenantSlug` decorators are available.
- *
- * @param fastify - The Fastify instance.
- * @param opts    - Injected dependencies (db, redis, minioClient).
- */
+
 export default async function createBucketPlugin(
   fastify: FastifyInstance,
   opts: CreateBucketPluginOptions,
 ): Promise<void> {
   const { db, redis, minioClient } = opts;
+  const authenticate = createAuthenticateHandler(db);
 
   fastify.route<{
     Params: { bucketName: string };

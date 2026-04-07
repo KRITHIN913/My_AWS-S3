@@ -1,26 +1,27 @@
 // src/jobs/quotaBreachWatcher.ts
-/**
- * Quota Breach Watcher Job
- * 
- * Runs every 5 minutes to detect and alert on quota breaches.
- * Reads hot counters from Redis and inserts breach events into Postgres.
- */
+
 import type { FastifyInstance } from 'fastify';
-import { eq, and, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { DrizzleDb } from '../db/index.js';
 import { tenants, quotaBreachEvents, type BreachType } from '../drizzle/schema.js';
 import { enqueueWebhook } from './webhookDispatcher.js';
 
-/**
- * Returns the current billing period in 'YYYY-MM' format.
- */
+/** Interval between breach-check runs (5 minutes). */
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
+
+
 function currentBillingPeriod(): string {
   const now = new Date();
   const year = now.getUTCFullYear();
   const month = (now.getUTCMonth() + 1).toString().padStart(2, '0');
   return `${year}-${month}`;
 }
+
+// ─────────────────────────────────────────────────────────────
+// Plugin registration
+// ─────────────────────────────────────────────────────────────
+
 
 export default async function quotaBreachWatcherPlugin(
   fastify: FastifyInstance,
@@ -29,34 +30,51 @@ export default async function quotaBreachWatcherPlugin(
   let timer: NodeJS.Timeout;
 
   fastify.ready(() => {
-    // Run every 5 minutes
     timer = setInterval(async () => {
       try {
         fastify.log.info('Running quota breach watcher');
         const result = await runBreachCheck(opts.db, opts.redis);
-        fastify.log.info(`Quota breach watcher complete: ${result.breachesDetected} breaches detected`);
+        fastify.log.info(
+          `Quota breach watcher complete: ${result.breachesDetected} breaches detected`,
+        );
+        // Record last successful run for /admin/system/health
+        await opts.redis.set('jobs:lastRun:breachWatcher', new Date().toISOString());
       } catch (err) {
         fastify.log.error(err, 'Quota breach watcher failed');
       }
-    }, 5 * 60 * 1000);
+    }, CHECK_INTERVAL_MS);
   });
 
-  fastify.addHook('onClose', (instance, done) => {
+  fastify.addHook('onClose', (_instance, done) => {
     clearInterval(timer);
     done();
   });
 }
 
-/**
- * Internal function exported for testing.
- */
+// ─────────────────────────────────────────────────────────────
+// Core breach-check logic — exported for testing
+// ─────────────────────────────────────────────────────────────
+
+
+interface ResourceCheck {
+  /** Resource identifier used to build the breach type enum value */
+  name: 'storage' | 'ingress' | 'egress' | 'bucket';
+  /** Current usage value (from Redis) */
+  current: bigint;
+  /** Limit value (from tenant meta) */
+  limit: bigint;
+}
+
+
+
 export async function runBreachCheck(
   db: DrizzleDb,
   redis: Redis,
 ): Promise<{ breachesDetected: number }> {
   let breachesDetected = 0;
-  const currentPeriod = currentBillingPeriod();
+  const period = currentBillingPeriod();
 
+  // Load all active tenants up-front to avoid N+1 queries
   const activeTenants = await db
     .select({
       id: tenants.id,
@@ -72,14 +90,12 @@ export async function runBreachCheck(
     .where(eq(tenants.status, 'active'));
 
   for (const tenant of activeTenants) {
-    if (!tenant.id || !tenant.slug) continue;
-
-    // 1. Load quota limits from Redis. On miss: load from Postgres and cache.
+    // ── Step 1: Load limits from Redis (cache with TTL 300s) ──
     const metaKey = `tenant:${tenant.slug}:meta`;
     let meta = await redis.hgetall(metaKey);
 
     if (Object.keys(meta).length === 0) {
-      // Cache miss
+      // Cache miss — populate from Postgres
       meta = {
         status: tenant.status,
         maxBuckets: tenant.maxBuckets.toString(),
@@ -88,19 +104,19 @@ export async function runBreachCheck(
         maxMonthlyEgressBytes: tenant.maxMonthlyEgressBytes.toString(),
       };
       await redis.hset(metaKey, meta);
-      await redis.expire(metaKey, 300); // 5 minutes TTL
+      await redis.expire(metaKey, 300);
     }
 
-    const maxStorageBytes = BigInt(meta.maxStorageBytes ?? tenant.maxStorageBytes);
-    const maxIngressBytes = BigInt(meta.maxMonthlyIngressBytes ?? tenant.maxMonthlyIngressBytes);
-    const maxEgressBytes = BigInt(meta.maxMonthlyEgressBytes ?? tenant.maxMonthlyEgressBytes);
-    const maxBuckets = BigInt(meta.maxBuckets ?? tenant.maxBuckets);
+    const maxStorageBytes = BigInt(meta['maxStorageBytes'] ?? tenant.maxStorageBytes.toString());
+    const maxIngressBytes = BigInt(meta['maxMonthlyIngressBytes'] ?? tenant.maxMonthlyIngressBytes.toString());
+    const maxEgressBytes = BigInt(meta['maxMonthlyEgressBytes'] ?? tenant.maxMonthlyEgressBytes.toString());
+    const maxBuckets = BigInt(meta['maxBuckets'] ?? tenant.maxBuckets.toString());
 
-    // 2. Read current counters from Redis
+    // ── Step 2: Read current counters from Redis ─────────────
     const [storageStr, ingressStr, egressStr, bucketsStr] = await Promise.all([
       redis.get(`quota:${tenant.slug}:storage_bytes`),
-      redis.get(`quota:${tenant.slug}:ingress:${currentPeriod}`),
-      redis.get(`quota:${tenant.slug}:egress:${currentPeriod}`),
+      redis.get(`quota:${tenant.slug}:ingress:${period}`),
+      redis.get(`quota:${tenant.slug}:egress:${period}`),
       redis.get(`quota:${tenant.slug}:bucket_count`),
     ]);
 
@@ -109,7 +125,7 @@ export async function runBreachCheck(
     const egressBytes = BigInt(egressStr || '0');
     const bucketCount = BigInt(bucketsStr || '0');
 
-    const resources = [
+    const resources: ResourceCheck[] = [
       { name: 'storage', current: storageBytes, limit: maxStorageBytes },
       { name: 'ingress', current: ingressBytes, limit: maxIngressBytes },
       { name: 'egress', current: egressBytes, limit: maxEgressBytes },
@@ -118,9 +134,9 @@ export async function runBreachCheck(
 
     let suspendTenant = false;
 
-    // 3. For each resource
+    // ── Step 3: Evaluate each resource ───────────────────────
     for (const res of resources) {
-      if (res.limit <= 0n) continue; // Prevent division by zero if limit is inexplicably 0
+      if (res.limit <= 0n) continue; // Prevent division by zero
 
       const usagePct = (res.current * 100n) / res.limit;
       let breachType: BreachType | null = null;
@@ -138,18 +154,18 @@ export async function runBreachCheck(
       }
 
       if (breachType && eventTypeString) {
-        // Check if recorded in last 24h
-        const recent = await db.execute<{ id: string }>(sql`
+        // Deduplicate: has this exact breach been recorded in the last 24 hours?
+        const recentResult = await db.execute<{ id: string }>(sql`
           SELECT id FROM quota_breach_events
           WHERE tenant_id = ${tenant.id}
             AND breach_type = ${breachType}::breach_type
-            AND billing_period = ${currentPeriod}
+            AND billing_period = ${period}
             AND detected_at > NOW() - INTERVAL '24 hours'
           LIMIT 1
         `);
 
-        if (recent.length === 0) {
-          // Record breach
+        if (recentResult.rows.length === 0) {
+          // Record new breach event
           await db.execute(sql`
             INSERT INTO quota_breach_events (
               tenant_id,
@@ -162,43 +178,44 @@ export async function runBreachCheck(
               ${breachType}::breach_type,
               ${res.current},
               ${res.limit},
-              ${currentPeriod}
+              ${period}
             )
           `);
-          
+
           breachesDetected++;
 
-          // Enqueue webhook
+          // Enqueue webhook notification
           if (tenant.webhookEndpointUrl) {
             await enqueueWebhook(db, {
-              tenantId: tenant.id!,
+              tenantId: tenant.id,
               endpointUrl: tenant.webhookEndpointUrl,
               eventType: eventTypeString,
               payload: {
                 breachType,
                 currentValue: res.current.toString(),
                 limitValue: res.limit.toString(),
-                period: currentPeriod
-              }
+                period,
+              },
             });
           }
         }
       }
     }
 
-    // 4. Auto-suspend tenant if ANY resource is at storage_exceeded
-    // Implementation constraint: only suspend if they were active (prevent suspend-loop)
-    // Filtered by `activeTenants` query so they are currently active.
+    // ── Step 4: Auto-suspend on storage_exceeded ─────────────
     if (suspendTenant) {
-      console.warn(`[WARN] Suspending tenant ${tenant.id} due to storage quota exceeded. Current: ${storageBytes}, Limit: ${maxStorageBytes}`);
-      
+      console.warn(
+        `[WARN] Suspending tenant ${tenant.id} (slug: ${tenant.slug}) ` +
+        `due to storage quota exceeded. Current: ${storageBytes}, Limit: ${maxStorageBytes}`,
+      );
+
       await db.execute(sql`
-        UPDATE tenants 
+        UPDATE tenants
         SET status = 'suspended', updated_at = NOW()
         WHERE id = ${tenant.id} AND status = 'active'
       `);
-      
-      // Update redis cache
+
+      // Update Redis cache to reflect suspension
       await redis.hset(metaKey, 'status', 'suspended');
     }
   }

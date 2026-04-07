@@ -1,19 +1,6 @@
 // src/lib/meteringService.ts
 
-/**
- * Metering Service
- *
- * The core billing pipeline for all data operations. This is the ONLY module
- * allowed to write to usage_metrics and update Redis byte counters. No route
- * handler writes billing events directly — they all call this service.
- *
- * Design:
- *   - PostgreSQL INSERT is synchronous (must succeed or caller knows).
- *   - Redis counter updates are parallel (Promise.all) for throughput.
- *   - Idempotency is enforced via ON CONFLICT (idempotencyKey) DO NOTHING.
- *   - Storage counter decrements use a Lua script to clamp at zero.
- *   - BigInt is used throughout for byte arithmetic — no precision loss.
- */
+
 
 import { eq, and, sql, sum } from 'drizzle-orm';
 import { usageMetrics, tenants } from '../drizzle/schema.js';
@@ -94,10 +81,6 @@ function tenantMetaKey(slug: string): string {
 // Billing period helper
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Returns the current billing period in 'YYYY-MM' format.
- * @returns A string like '2025-06'.
- */
 function currentBillingPeriod(): string {
   const now = new Date();
   const year = now.getUTCFullYear();
@@ -112,10 +95,6 @@ const MONTHLY_TTL_SECONDS = 35 * 24 * 60 * 60;
 // BigInt JSON replacer
 // ─────────────────────────────────────────────────────────────
 
-/**
- * JSON.stringify replacer that converts BigInt values to strings.
- * Required because JSON.stringify throws on BigInt by default.
- */
 function bigintReplacer(_key: string, value: unknown): unknown {
   return typeof value === 'bigint' ? value.toString() : value;
 }
@@ -142,23 +121,6 @@ return v
 // ─────────────────────────────────────────────────────────────
 // Exported functions
 // ─────────────────────────────────────────────────────────────
-
-/**
- * Records a data_in (ingress) billing event.
- * Called after a successful PutObject stream completes.
- *
- * Writes atomically:
- *   1. INSERT into usage_metrics (eventType='data_in', bytes=bytesUploaded)
- *      with ON CONFLICT (idempotencyKey) DO NOTHING for retry safety.
- *   2. INCRBY quota:{slug}:storage_bytes {bytesUploaded}
- *   3. INCRBY quota:{slug}:ingress:{YYYY-MM} {bytesUploaded} (TTL: 35 days)
- *
- * Steps 2-3 are Redis INCRBY executed in parallel via Promise.all.
- *
- * @param params - Ingress event parameters.
- * @param db     - Drizzle database instance.
- * @param redis  - ioredis client instance.
- */
 export async function recordIngress(
   params: RecordIngressParams,
   db: DrizzleDb,
@@ -191,21 +153,6 @@ export async function recordIngress(
   ]);
 }
 
-/**
- * Records a data_out (egress) billing event.
- * Called after a successful GetObject stream completes.
- *
- * Writes:
- *   1. INSERT into usage_metrics (eventType='data_out', bytes=bytesDownloaded)
- *   2. INCRBY quota:{slug}:egress:{YYYY-MM} {bytesDownloaded} (TTL: 35 days)
- *
- * Note: egress does NOT increment storage_bytes — storage is consumed
- * by writes and object retention, not by reads.
- *
- * @param params - Egress event parameters.
- * @param db     - Drizzle database instance.
- * @param redis  - ioredis client instance.
- */
 export async function recordEgress(
   params: RecordEgressParams,
   db: DrizzleDb,
@@ -233,18 +180,7 @@ export async function recordEgress(
   await redis.expire(eKey, MONTHLY_TTL_SECONDS);
 }
 
-/**
- * Records a deletion billing event and decrements the storage counter in Redis.
- *
- * Writes:
- *   1. INSERT into usage_metrics (eventType='bucket_deleted', bytes=freedBytes)
- *   2. DECRBY quota:{slug}:storage_bytes {freedBytes}
- *      — clamped to 0 via Lua script (never goes negative)
- *
- * @param params - Deletion event parameters.
- * @param db     - Drizzle database instance.
- * @param redis  - ioredis client instance.
- */
+
 export async function recordDeletion(
   params: RecordDeletionParams,
   db: DrizzleDb,
@@ -276,20 +212,7 @@ export async function recordDeletion(
   );
 }
 
-/**
- * Checks whether a tenant has sufficient ingress quota remaining for the
- * current billing period.
- *
- * Reads quota:{slug}:ingress:{YYYY-MM} from Redis first; falls back to
- * computing the sum from usage_metrics in Postgres on cache miss.
- *
- * @param tenantId     - UUID of the tenant.
- * @param tenantSlug   - Slug of the tenant (for Redis keys).
- * @param requestBytes - Bytes the current request wants to upload.
- * @param db           - Drizzle database instance.
- * @param redis        - ioredis client instance.
- * @returns QuotaCheckResult — never throws; returns allowed:false on breach.
- */
+
 export async function checkIngressQuota(
   tenantId: string,
   tenantSlug: string,
@@ -314,17 +237,7 @@ export async function checkIngressQuota(
   return { allowed: true, currentBytes, limitBytes };
 }
 
-/**
- * Checks whether a tenant has sufficient storage quota remaining.
- * Same pattern as checkIngressQuota but reads the total storage counter.
- *
- * @param tenantId     - UUID of the tenant.
- * @param tenantSlug   - Slug of the tenant (for Redis keys).
- * @param requestBytes - Bytes the current request wants to store.
- * @param db           - Drizzle database instance.
- * @param redis        - ioredis client instance.
- * @returns QuotaCheckResult — never throws; returns allowed:false on breach.
- */
+
 export async function checkStorageQuota(
   tenantId: string,
   tenantSlug: string,
@@ -376,17 +289,8 @@ export async function checkStorageQuota(
   return { allowed: true, currentBytes, limitBytes };
 }
 
-/**
- * Checks whether a tenant has sufficient egress quota remaining for the
- * current billing period.
- *
- * @param tenantId     - UUID of the tenant.
- * @param tenantSlug   - Slug of the tenant.
- * @param requestBytes - Bytes the current request would transfer out.
- * @param db           - Drizzle database instance.
- * @param redis        - ioredis client instance.
- * @returns QuotaCheckResult — never throws; returns allowed:false on breach.
- */
+
+ 
 export async function checkEgressQuota(
   tenantId: string,
   tenantSlug: string,
@@ -398,7 +302,7 @@ export async function checkEgressQuota(
   const limitBytes = await getTenantLimit(tenantId, tenantSlug, 'maxMonthlyEgressBytes', db, redis);
   const currentBytes = await getCounterValue(
     egressKey(tenantSlug, period),
-    tenantId,
+    tenantId, 
     period,
     'data_out',
     db,
@@ -415,17 +319,6 @@ export async function checkEgressQuota(
 // Internal helpers
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Reads a tenant's quota limit from the Redis meta cache, falling back
- * to Postgres on cache miss. Returns the limit as bigint.
- *
- * @param tenantId - UUID of the tenant.
- * @param slug     - Tenant slug for Redis key.
- * @param field    - The specific limit field to read.
- * @param db       - Drizzle DB instance.
- * @param redis    - ioredis client.
- * @returns The quota limit value as bigint.
- */
 async function getTenantLimit(
   tenantId: string,
   slug: string,
@@ -470,18 +363,7 @@ async function getTenantLimit(
   return tenant[field];
 }
 
-/**
- * Reads a monthly byte counter from Redis, falling back to Postgres SUM
- * on cache miss. Writes the computed value back to Redis.
- *
- * @param redisKey  - Full Redis key for this counter.
- * @param tenantId  - UUID of the tenant.
- * @param period    - Billing period (YYYY-MM).
- * @param eventType - The event type to sum from usage_metrics.
- * @param db        - Drizzle DB instance.
- * @param redis     - ioredis client.
- * @returns Current counter value as bigint.
- */
+
 async function getCounterValue(
   redisKey: string,
   tenantId: string,

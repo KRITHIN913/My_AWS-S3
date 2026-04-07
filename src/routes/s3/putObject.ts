@@ -25,7 +25,7 @@ import { buckets } from '../../drizzle/schema.js';
 import type { DrizzleDb } from '../../db/index.js';
 import type { Redis } from 'ioredis';
 import type { Client as MinioClientType } from 'minio';
-import { authenticate } from '../../plugins/authenticate.js';
+import { createAuthenticateHandler } from '../../plugins/authenticate.js';
 import { streamPutToMinio } from '../../lib/s3ProxyStream.js';
 import {
   checkStorageQuota,
@@ -37,15 +37,6 @@ import {
 // S3 XML error helper
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Builds an S3-compatible XML error response body.
- *
- * @param code      - S3 error code (e.g. 'NoSuchBucket', 'QuotaExceeded').
- * @param message   - Human-readable error message.
- * @param resource  - The resource that caused the error.
- * @param requestId - Unique request ID for traceability.
- * @returns XML error string.
- */
 function buildS3Error(
   code: string,
   message: string,
@@ -67,17 +58,7 @@ function buildS3Error(
 // Validation
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Validates an S3 object key.
- *
- * Rules:
- *   - 1 to 1024 characters
- *   - No leading slash
- *   - No null bytes
- *
- * @param key - The candidate object key.
- * @returns null if valid, or a string describing the validation error.
- */
+
 function validateObjectKey(key: string): string | null {
   if (key.length < 1) {
     return 'Object key must be at least 1 character';
@@ -93,13 +74,6 @@ function validateObjectKey(key: string): string | null {
   }
   return null;
 }
-
-/**
- * Validates a bucket name using S3 naming rules.
- *
- * @param name - The candidate bucket name.
- * @returns null if valid, or a validation error string.
- */
 function validateBucketName(name: string): string | null {
   if (name.length < 3) return 'Bucket name must be at least 3 characters long';
   if (name.length > 63) return 'Bucket name must not exceed 63 characters';
@@ -113,19 +87,18 @@ function validateBucketName(name: string): string | null {
 // Route plugin
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Fastify plugin that registers the `PUT /:bucketName/*` route for PutObject.
- *
- * Uses wildcard param to capture objectKey with slashes (e.g. photos/2025/img.jpg).
- *
- * @param fastify - Fastify instance.
- * @param opts    - Injected dependencies.
- */
+export interface PutObjectPluginOptions {
+  db: DrizzleDb;
+  redis: Redis;
+  minioClient: MinioClientType;
+}
+
 export default async function putObjectRoute(
   fastify: FastifyInstance,
-  opts: { db: DrizzleDb; redis: Redis; minioClient: MinioClientType },
+  opts: PutObjectPluginOptions,
 ): Promise<void> {
   const { db, redis, minioClient } = opts;
+  const authenticate = createAuthenticateHandler(db);
 
   fastify.route({
     method: 'PUT',
@@ -170,7 +143,7 @@ export default async function putObjectRoute(
         return;
       }
 
-      // Read headers
+      // Read headers - for file size and type
       const contentLengthHeader = request.headers['content-length'];
       const contentLength = contentLengthHeader ? parseInt(contentLengthHeader, 10) : -1;
       const contentType = (request.headers['content-type'] as string) ?? 'application/octet-stream';

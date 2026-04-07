@@ -1,20 +1,6 @@
 // src/routes/s3/getObject.ts
 
-/**
- * S3 GetObject Route Plugin
- *
- * Handles `GET /:bucketName/*` — the S3-compatible GetObject operation.
- * Streams the object from MinIO directly to the client via
- * ByteCounterTransform. Never buffers the full object in memory.
- *
- * Execution sequence:
- *   ① Validate params (bucketName, objectKey)
- *   ② Load + validate bucket
- *   ③ Quota check — monthly egress (stat object first to get size)
- *   ④ Stream object from MinIO to client
- *   ⑤ Record egress billing event
- *   ⑥ Return (headers already set by streamGetFromMinio)
- */
+
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and, isNull } from 'drizzle-orm';
@@ -24,7 +10,7 @@ import { buckets } from '../../drizzle/schema.js';
 import type { DrizzleDb } from '../../db/index.js';
 import type { Redis } from 'ioredis';
 import type { Client as MinioClientType } from 'minio';
-import { authenticate } from '../../plugins/authenticate.js';
+import { createAuthenticateHandler } from '../../plugins/authenticate.js';
 import { streamGetFromMinio } from '../../lib/s3ProxyStream.js';
 import { checkEgressQuota, recordEgress } from '../../lib/meteringService.js';
 
@@ -32,9 +18,7 @@ import { checkEgressQuota, recordEgress } from '../../lib/meteringService.js';
 // S3 XML error helper
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Builds an S3-compatible XML error response body.
- */
+
 function buildS3Error(
   code: string,
   message: string,
@@ -56,10 +40,7 @@ function buildS3Error(
 // Validation helpers (shared with putObject)
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Validates an S3 object key.
- * @returns null if valid, or a validation error string.
- */
+
 function validateObjectKey(key: string): string | null {
   if (key.length < 1) return 'Object key must be at least 1 character';
   if (key.length > 1024) return 'Object key must not exceed 1024 characters';
@@ -68,10 +49,7 @@ function validateObjectKey(key: string): string | null {
   return null;
 }
 
-/**
- * Validates a bucket name using S3 naming rules.
- * @returns null if valid, or a validation error string.
- */
+
 function validateBucketName(name: string): string | null {
   if (name.length < 3) return 'Bucket name must be at least 3 characters long';
   if (name.length > 63) return 'Bucket name must not exceed 63 characters';
@@ -85,11 +63,7 @@ function validateBucketName(name: string): string | null {
 // MinIO error classifier
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Determines if a MinIO error is a NotFound-class error.
- * MinIO throws errors with a `code` property of 'NotFound' or
- * 'NoSuchKey' when the object does not exist.
- */
+
 function isNotFoundError(err: unknown): boolean {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = (err as { code: string }).code;
@@ -102,17 +76,17 @@ function isNotFoundError(err: unknown): boolean {
 // Route plugin
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Fastify plugin that registers `GET /:bucketName/*` for GetObject.
- *
- * @param fastify - Fastify instance.
- * @param opts    - Injected dependencies.
- */
+export interface GetObjectPluginOptions {
+  db: DrizzleDb;
+  redis: Redis;
+  minioClient: MinioClientType;
+}
 export default async function getObjectRoute(
   fastify: FastifyInstance,
   opts: { db: DrizzleDb; redis: Redis; minioClient: MinioClientType },
 ): Promise<void> {
   const { db, redis, minioClient } = opts;
+  const authenticate = createAuthenticateHandler(db);
 
   fastify.route({
     method: 'GET',
