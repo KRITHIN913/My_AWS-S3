@@ -1,18 +1,5 @@
 // src/drizzle/schema.ts
-/**
- * src/db/schema.ts
- *
- * Project 5 — Multi-Tenant Usage Metering & Billing Engine
- *
- * Schema Design Principles
- * ────────────────────────
- * 1. Multi-tenant isolation enforced at the DB layer. Every resource row
- *    carries a tenant_id FK.
- * 2. usage_metrics is an APPEND-ONLY event log.
- * 3. Byte values use bigint — no float precision drift.
- * 4. Timestamps are timestamptz. Always store UTC.
- * 5. pgEnum for status/event_type so Postgres enforces the domain.
- */
+
 
 import {
   pgTable,

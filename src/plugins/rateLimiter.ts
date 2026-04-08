@@ -1,14 +1,5 @@
 // src/plugins/rateLimiter.ts
-/**
- * Redis Sliding Window Rate Limiter
- *
- * Implements a pure-Lua atomic sliding window using a Redis sorted set.
- * No external packages — all logic is in the Lua script executed via
- * redis.eval(), which is atomic (single-threaded Redis execution).
- *
- * Redis key: ratelimit:{tenantSlug}:{route}
- * Structure:  Sorted set, score = timestamp in ms, member = unique request UUID
- */
+
 
 import type { Redis } from 'ioredis';
 import { randomUUID } from 'node:crypto';

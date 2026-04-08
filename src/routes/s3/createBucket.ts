@@ -1,23 +1,6 @@
 // src/routes/s3/createBucket.ts
 
-/**
- * S3 CreateBucket Route Plugin
- *
- * Handles `PUT /:bucketName` — the S3-compatible CreateBucket operation.
- *
- * Execution sequence:
- *   ① Authenticate (via upstream preHandler)
- *   ② Validate bucket name (S3 naming rules)
- *   ③ Load tenant quota (Redis cache → Postgres fallback)
- *   ④ Check bucket count quota
- *   ⑤ Check for duplicate bucket (idempotency)
- *   ⑥ Acquire advisory lock (inside transaction)
- *   ⑦ Postgres transaction (insert bucket + usage_metric)
- *   ⑧ Provision physical bucket in MinIO
- *   ⑨ Flip bucket status to 'active'
- *   ⑩ Update Redis counters
- *   ⑪ Return 200 with Location header
- */
+
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and, isNull, sql } from 'drizzle-orm';

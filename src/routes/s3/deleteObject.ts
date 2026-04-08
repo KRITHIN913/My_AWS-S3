@@ -1,20 +1,5 @@
 // src/routes/s3/deleteObject.ts
 
-/**
- * S3 DeleteObject Route Plugin
- *
- * Handles `DELETE /:bucketName/*` — the S3-compatible DeleteObject operation.
- * Stats the object BEFORE deleting to capture freed bytes for billing.
- *
- * Execution sequence:
- *   ① Validate params (bucketName, objectKey)
- *   ② Load + validate bucket
- *   ③ Stat the object BEFORE deleting (capture size)
- *   ④ Delete from MinIO
- *   ⑤ Record deletion billing event
- *   ⑥ Return 204 with empty body
- */
-
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and, isNull } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';

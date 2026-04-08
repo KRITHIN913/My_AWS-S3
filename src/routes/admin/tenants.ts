@@ -1,15 +1,5 @@
 // src/routes/admin/tenants.ts
-/**
- * Admin Tenant Management Routes
- *
- * Prefix: /admin/tenants
- * Auth:   adminAuthenticate on all routes
- *         requireSuperadmin on all mutating routes (POST/PATCH/DELETE)
- *
- * All responses use JSON. bigint columns serialised as strings.
- * Audit log written in the same DB transaction as each mutation.
- * Keyset pagination (no OFFSET).
- */
+
 import type { FastifyInstance } from 'fastify';
 import { eq, sql, and, or, ilike } from 'drizzle-orm';
 import type { Redis } from 'ioredis';

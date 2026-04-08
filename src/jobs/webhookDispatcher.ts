@@ -1,7 +1,5 @@
 // src/jobs/webhookDispatcher.ts
-/**
 
- */
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';

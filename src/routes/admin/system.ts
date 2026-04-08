@@ -1,14 +1,5 @@
 // src/routes/admin/system.ts
-/**
- * Admin System Health & Audit Routes
- *
- * Prefix: /admin/system
- * Auth:   adminAuthenticate on all routes
- *         requireSuperadmin on GET /audit-log
- *
- * GET /health     — live probe of Postgres, Redis, MinIO + job lastRun timestamps
- * GET /audit-log  — paginated read of audit_log table with rich filter support
- */
+
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';

@@ -1,15 +1,5 @@
 // src/routes/admin/plans.ts
-/**
- * Admin Plan Management Routes
- *
- * Prefix: /admin/plans
- * Auth:   adminAuthenticate on all routes
- *         requireSuperadmin on POST/PATCH/DELETE
- *
- * Plan updates do NOT retroactively change tenant quotas.
- * Plans can only be soft-deleted (isActive=false) if no tenants
- * are currently assigned to them.
- */
+
 import type { FastifyInstance } from 'fastify';
 import { eq, sql } from 'drizzle-orm';
 import type { DrizzleDb } from '../../db/index.js';

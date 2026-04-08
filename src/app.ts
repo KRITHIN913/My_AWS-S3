@@ -1,20 +1,5 @@
 // src/app.ts
-/**
- * Fastify Application Factory
- *
- * Wires all plugins and routes in dependency order.
- * Does NOT read process.env — all external resources arrive as opts.
- *
- * Registration order:
- *   0. CORS plugin (must be first — before any route)
- *   1. Request decorators (tenantId, tenantSlug, adminId, adminRole)
- *   1b. Auth routes (/auth/* — unauthenticated, must precede protected routes)
- *   2. S3 proxy routes  (PUT /:bucketName, PUT/:bucket/:key, GET/:bucket/:key, DELETE/:bucket/:key)
- *   3. Billing routes   (/billing/*)
- *   4. Portal routes    (/portal/*)
- *   5. Admin routes     (/admin/*)
- *   6. Background jobs  — started on 'ready' hook
- */
+
 
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';

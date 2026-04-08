@@ -1,14 +1,5 @@
 // src/routes/portal/index.ts
-/**
- * Tenant Self-Service Portal API
- *
- * Prefix: /portal
- * Auth:   authenticate preHandler (API key) on all routes.
- * Rate:   portal_write limit on all mutating operations.
- *
- * Responses: JSON. bigint → string. Errors: { error, detail? }.
- * rawKey returned ONCE on POST /keys — never stored, never retrievable.
- */
+
 
 import type { FastifyInstance } from 'fastify';
 import { eq, and, desc, sql } from 'drizzle-orm';

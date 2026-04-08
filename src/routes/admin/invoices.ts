@@ -1,15 +1,4 @@
 // src/routes/admin/invoices.ts
-/**
- * Admin Invoice Management Routes
- *
- * Prefix: /admin/invoices
- * Auth:   adminAuthenticate on all routes
- *         requireSuperadmin on POST (finalise/void)
- *
- * Keyset pagination on (billingPeriod DESC, id) for list endpoint.
- * finalise is idempotent — already-finalised invoices return 200 no-op.
- * void enqueues an 'invoice.voided' webhook to the tenant.
- */
 import type { FastifyInstance } from 'fastify';
 import { eq, and, sql } from 'drizzle-orm';
 import type { DrizzleDb } from '../../db/index.js';

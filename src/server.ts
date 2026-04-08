@@ -1,14 +1,5 @@
 // src/server.ts
-/**
- * Server entry-point
- *
- * Reads infrastructure configuration from environment variables,
- * creates the external clients (Postgres pool, ioredis, MinIO),
- * calls buildApp(), then starts listening.
- *
- * Handles SIGTERM gracefully: closes the Fastify instance (which
- * calls all onClose hooks and stops background jobs) before exiting.
- */
+
 
 import 'dotenv/config';
 import pg from 'pg';

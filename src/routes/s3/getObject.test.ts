@@ -1,14 +1,6 @@
 // src/routes/s3/getObject.test.ts
 
-/**
- * Test suite for the S3 GetObject route (`GET /:bucketName/*`).
- *
- * Uses:
- *   - Vitest as the test runner
- *   - fastify.inject() for request simulation
- *   - Real PostgreSQL + Redis connections
- *   - Mocked MinIO client (statObject, getObject)
- */
+
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';

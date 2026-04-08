@@ -1,21 +1,6 @@
 // src/routes/s3/putObject.ts
 
-/**
- * S3 PutObject Route Plugin
- *
- * Handles `PUT /:bucketName/*` — the S3-compatible PutObject operation.
- * Streams the request body directly to MinIO via ByteCounterTransform.
- * Never buffers the full object in memory.
- *
- * Execution sequence:
- *   ① Parse + validate (bucketName, objectKey, headers)
- *   ② Load bucket record
- *   ③ Quota check — storage bytes
- *   ④ Quota check — monthly ingress bytes
- *   ⑤ Stream upload to MinIO
- *   ⑥ Record billing event
- *   ⑦ Return 200 with ETag
- */
+
 
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { eq, and, isNull } from 'drizzle-orm';
