@@ -115,10 +115,7 @@ export default function Sidebar() {
     <aside className="flex flex-col w-[210px] shrink-0 h-full bg-sidebar overflow-y-auto">
       {/* Logo row */}
       <div className="flex items-center gap-3 px-4 py-5 shrink-0">
-        <div className="w-8 h-8 rounded-full bg-brand flex items-center justify-center text-white text-sm font-bold shrink-0">
-          S
-        </div>
-        <span className="text-white text-sm font-semibold">StorageOS</span>
+        <span className="text-white text-xl font-semibold">StorageOS</span>
       </div>
 
       <SectionLabel label="Storage" />
